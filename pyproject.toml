@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toonify"
+version = "0.1.0"
+description = "Photo -> rigged anime avatar that lip-syncs live from streamed PCM audio"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "numpy",
+  "pillow",
+  "requests",
+  "psd-tools",
+  "aiohttp",
+  "websockets>=12",
+  "rembg",
+  "onnxruntime-gpu==1.22.0",   # CUDA 12 build, matches the torch cu128 libraries
+  "scipy",
+]
+
+[project.scripts]
+toonify = "toonify.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["toonify*"]
+
+[tool.setuptools.package-data]
+toonify = ["presets.json"]

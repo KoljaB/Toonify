@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Toonify Player</title>
+<style>
+  html,body{margin:0;height:100%;background:#1d2230;color:#cfd6e6;font:12px/1.4 system-ui,sans-serif;overflow:hidden}
+  body{display:flex;align-items:flex-end;justify-content:center}
+  #stage{position:relative;overflow:hidden}
+  #cv{position:absolute}
+  #status{position:fixed;left:8px;bottom:6px;opacity:.7}
+  #unlock{position:fixed;top:12px;left:50%;transform:translateX(-50%);padding:8px 14px;border:0;border-radius:6px;
+          background:#3b6ee8;color:#fff;font-size:13px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="cv"></canvas></div>
+<button id="unlock">Click to enable audio</button>
+<div id="status">loading…</div>
+<script src="vendor/ag-psd.min.js"></script>
+<script src="vendor/rigger.js"></script>
+<script src="vendor/renderer.js"></script>
+<script src="rig.js"></script>
+<script src="audio.js"></script>
+<script src="player.js"></script>
+</body>
+</html>

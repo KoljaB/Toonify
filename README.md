@@ -1,0 +1,146 @@
+# Toonify
+
+A photo (or an existing anime picture) of a person goes in. A rigged anime avatar of that person comes out. It
+idles in the browser (blinks, breathes, sways, hair physics) and **lip-syncs live from streamed PCM audio**.
+
+```
+photo ──► 1 stylize ──► 2 decompose ──► 3 expressions ──► 4 player (browser) ◄── 6 stream_client ◄── TTS
+          Qwen-Image     see-through     Qwen-Image          Anime2.5DRig rig        WebSocket PCM
+          2.1 edit       PSD + layers    masked inpaint      + Web Audio lip-sync
+          (GPU, once)    (GPU, once)     (GPU, once)         (no ML, no GPU compute)
+```
+
+Stages read and write `runs/<run id>/` and are cached by input hashes, so you can rerun any stage alone.
+
+## Install (GPU machine, Linux)
+
+```bash
+git clone --recursive <this repo> toonify && cd toonify     # see-through comes in as a submodule
+conda create -n toonify python=3.12 -y && conda activate toonify     # or: python3.12 -m venv .venv
+pip install torch==2.8.0+cu128 torchvision==0.23.0+cu128 torchaudio==2.8.0+cu128 \
+  --index-url https://download.pytorch.org/whl/cu128
+pip install -r third_party/see-through/requirements.txt          # run from the submodule root (it has -e paths)
+(cd third_party/see-through && ln -sfn common/assets assets)
+pip install -e .
+pip install numpy==2.2.6          # see-through's pin; rembg's newer numpy requirement is not needed for remove()
+```
+
+**Image-edit backend:** a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with Qwen-Image 2.1
+(`diffusion_models/qwen_image_2.1_bf16.safetensors`, `text_encoders/qwen3vl_8b_bf16.safetensors`,
+`vae/qwen_image_2.1_vae_bf16.safetensors`). Point Toonify at it:
+
+| variable | default | meaning |
+|---|---|---|
+| `TOONIFY_COMFY_URL` | `http://127.0.0.1:8188` | ComfyUI server |
+| `TOONIFY_COMFY_DIR` | – | ComfyUI folder; if set, Toonify starts ComfyUI when nothing listens on the URL |
+| `TOONIFY_COMFY_PYTHON` | `<COMFY_DIR>/../.venv/bin/python` | interpreter for that ComfyUI |
+| `TOONIFY_QWEN_UNET` / `_CLIP` / `_VAE` / `_STEPS` / `_CFG` | see `toonify/config.py` | model file names, sampler |
+| `TOONIFY_PRESETS` | – | extra style presets (JSON, same shape as `toonify/presets.json`) |
+
+see-through downloads its weights (~10 GB) from Hugging Face on the first run. A token in
+`~/.cache/huggingface/token` is used automatically.
+
+## CLI
+
+```bash
+toonify run photo.jpg --style default        # stages 1–3, prints the player URL and serves it (port 8780)
+toonify run anime.png --style faithful       # keep an existing anime drawing's art style
+toonify run photo.jpg --no-serve             # only print the URL (when `toonify serve` already runs)
+
+toonify stylize photo.jpg --style default    # stage 1 -> runs/<id>/stylized.png   (prints the run id)
+toonify decompose <run id> [--vram auto|full|group_offload|nf4|blockswap]
+toonify expressions <run id> [--only eyes_closed mouth_open]
+toonify serve [--port 8780]                  # player + audio relay
+```
+
+Add `--force` to any stage to ignore the cache. Player URL: `http://<host>:8780/?run=<run id>`. Click
+*enable audio* once (browser autoplay policy).
+
+**Styles** (`toonify/presets.json`, prompt plus optional LoRA name and strength):
+- `default`: redraws a photo as clean, flat cel-shaded anime. This decomposes most reliably.
+- `faithful`: for inputs that are already illustrations. Keeps the art style, shading and face, and only removes
+  background and props.
+- `soft`: pastel light-novel look.
+
+Full-body inputs are cropped to head–waist automatically before the edit, so the face is drawn large.
+
+### VRAM modes (stage 2)
+
+`--vram auto` (default) reads the GPU's total memory and picks:
+
+| mode | when | see-through command | peak VRAM @1280 |
+|---|---|---|---|
+| `full` | ≥ 16 GB | `inference_psd.py` (bf16) | ~12–16 GB |
+| `group_offload` | 11–16 GB | `inference_psd.py --group_offload` | ~10 GB |
+| `nf4` | < 11 GB | `inference_psd_quantized.py` (needs `requirements-inference-bnb.txt`) | ~8 GB |
+| `blockswap` | manual | `inference_psd_blockswap.py` | ~8 GB |
+
+Before stage 2, Toonify asks ComfyUI to unload its models (`POST /free`), or stops it if Toonify started it, so
+both never hold VRAM at the same time.
+
+## Outputs (`runs/<id>/`)
+
+| file | stage |
+|---|---|
+| `input_framed.png` | upper-body crop of a full-body input (if applied) |
+| `stylized_raw.png`, `stylized.png` | 1: anime image, and the same with a transparent background |
+| `avatar.psd` | 2: see-through layers, plus the repair step (see below) |
+| `layers.json` | 2/3: canvas, source offset, per layer `name`, `tag`, `bbox`, draw `order`; `expressions` |
+| `expressions/eyes_closed.png`, `mouth_half.png`, `mouth_open.png` | 3: RGBA patches (bbox in `layers.json`) |
+| `expressions/preview_*.png`, `mask_*.png` | 3: full-frame previews and inpainting masks |
+
+**Decompose repair:** see-through completes hidden parts of each layer, and occasionally such a part ends up drawn
+over a layer it should be behind (a crop top continued over trousers). Parts outside its 23 classes can also be
+dropped (headphones). After see-through, Toonify compares the layer composite with the source. It trims a top
+layer where the layer below matches the source, and re-adds large missing regions as `objects` (body) or
+`headwear` (head) layers.
+
+## WebSocket protocol
+
+The player connects to `ws://<host>:8780/ws/play`; producers connect to `ws://<host>:8780/ws/feed`. The server
+relays every feed message to all players and replays the last handshake to players that join late.
+
+| message | frame | content |
+|---|---|---|
+| handshake | text | `{"type":"start","sample_rate":24000,"format":"int16","channels":1}` (`format`: `int16` or `float32`, little-endian, mono only) |
+| PCM chunk | binary | raw samples in the handshake format, **any size**; a partial sample at the end is carried over to the next chunk |
+| end | text | `{"type":"end"}`: no more audio for this utterance |
+
+Send a new `start` whenever the sample rate or format changes. Playback runs in an **AudioWorklet**
+(`player/pcm-worklet.js`, modelled on miep's `tts-worklet.js`). The worklet copies samples out of one queue on the
+audio thread, so chunk joins are sample-exact. It holds 100 ms before (re)starting and fades over 64 samples on a
+real underrun. Scheduling a separate `AudioBufferSourceNode` per chunk was tried first and clicked audibly at the
+joins. The `AudioContext` runs at the stream's sample rate. Everything plays through one `AnalyserNode`. Each
+animation frame computes RMS over the playing audio, smooths it (attack 12 ms / release 60 ms), normalizes it by
+the recent speech peak and maps it to closed / half / open with hysteresis. The picture then glides between the
+neighbouring mouth frames. The mouth closes when the worklet reports an empty queue, so it also closes after `end`
+once the last sample has played. Thresholds can be overridden in the URL: `gate`, `halfOn`, `halfOff`, `openOn`,
+`openOff`, `attack`, `release`, `peakDecay`, `prebuffer`.
+
+**Secure context required:** browsers only provide AudioWorklet over HTTPS or on `localhost`. Either open the
+player through an SSH tunnel (`ssh -N -L 8780:127.0.0.1:8780 user@gpu-host`, then `http://localhost:8780/?run=…`)
+or serve HTTPS: `toonify serve --ssl-cert cert.pem --ssl-key key.pem` (for example with certificates from mkcert, as
+miep does).
+
+## Streaming audio
+
+```python
+from toonify.stream_client import StreamClient
+with StreamClient("ws://host:8780/ws/feed") as c:
+    c.start(sample_rate=24000, fmt="int16")
+    for chunk in chunks:           # bytes or numpy arrays
+        c.send(chunk)
+    c.end()
+```
+
+- WAV files take the same path: `python -m toonify.stream_client speech.wav --url ws://host:8780/ws/feed`
+  (paced at real time; `--burst` sends everything at once).
+- RealtimeTTS: `python examples/realtimetts_stream.py --url ws://host:8780/ws/feed --tts-url http://<qwen tts server>:18085 "Hello!"`.
+  This uses `QwenServerEngine` (RealtimeTTS ≥ 0.9.0rc4) with local playback muted and `on_audio_chunk=client.send`.
+  `--engine kokoro` runs locally instead.
+
+## Docs
+
+- `docs/decisions.md`: why Anime2.5DRig, what was vendored, stripped and added
+- `docs/status.md`: what works, measured numbers, known problems, with samples in `docs/samples/`
+- `docs/licenses.md`: every repo and model with its license (note: Qwen-Image 2.1 is research-only)

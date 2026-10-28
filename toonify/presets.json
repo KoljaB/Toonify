@@ -1,0 +1,20 @@
+{
+  "default": {
+    "prompt": "Redraw this photo as a clean 2D anime character illustration of the same person: cel shading, crisp clean line art, flat colors, anime proportions for the eyes. Keep the person's identity, face shape, hairstyle, hair color, eye color, glasses and clothing. Front-facing, looking straight at the viewer, upper body visible from the head to the waist, arms relaxed at the sides. Neutral calm expression, mouth closed, both eyes fully open. Plain pure white background, no scenery, no text, no other people.",
+    "negative": "photorealistic, 3d render, background scenery, text, watermark, extra people, open mouth, closed eyes, cropped head",
+    "lora": null,
+    "lora_strength": 1.0
+  },
+  "soft": {
+    "prompt": "Redraw this photo as a soft pastel anime character illustration of the same person in a light-novel cover style: gentle cel shading, thin clean line art. Keep the person's identity, face shape, hairstyle, hair color, eye color, glasses and clothing. Front-facing, looking straight at the viewer, upper body visible from the head to the waist. Neutral calm expression, mouth closed, both eyes fully open. Plain pure white background, no scenery, no text, no other people.",
+    "negative": "photorealistic, 3d render, background scenery, text, watermark, extra people, open mouth, closed eyes, cropped head",
+    "lora": null,
+    "lora_strength": 1.0
+  },
+  "faithful": {
+    "prompt": "Keep the character exactly as drawn in the input image: same face, expression, eye color, hairstyle and hair texture, glasses, clothing, colors, shading, lighting and the same art style and level of detail. Do not simplify or redraw the style. Only change this: remove the whole background and every object that is not worn by the character (cups, animals, furniture), place the character alone on a plain pure white background, let both arms hang relaxed with empty hands, and show the character front-facing from the top of the head down to the waist. Mouth closed, both eyes open.",
+    "negative": "flat colors, simplified, different art style, background scenery, extra objects, text, watermark, extra people, cropped head",
+    "lora": null,
+    "lora_strength": 1.0
+  }
+}
