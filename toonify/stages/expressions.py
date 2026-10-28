@@ -26,12 +26,14 @@ EXPRESSIONS = {
     "mouth_half": {
         "slot": "mouth_half", "region": "mouth", "denoise": 0.8, "seed": 12,
         "prompt": "Open the mouth slightly as if speaking: lips parted with a small dark opening and a hint of "
-                  "the upper teeth. Eyes stay open. " + KEEP,
+                  "the upper teeth. The upper lip stays exactly where it is and keeps its width; only the lower "
+                  "lip moves down a little. Eyes stay open. " + KEEP,
     },
     "mouth_open": {
         "slot": "mouth_open", "region": "mouth", "denoise": 0.92, "seed": 13,
         "prompt": "Open the mouth as in normal speech while saying 'ah' (not shouting): a medium-sized opening "
-                  "with the upper teeth and a dark mouth interior visible, jaw slightly lowered. Eyes stay open. "
+                  "with the upper teeth and a dark mouth interior visible. The upper lip stays exactly where it is "
+                  "and keeps its width; only the lower lip and jaw move down. Eyes stay open. "
                   + KEEP,
     },
 }
@@ -89,7 +91,9 @@ def region_mask(region: str, alphas: dict, info: dict, size: tuple[int, int]) ->
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         rx = max((x1 - x0) * 0.85, face_w * 0.16)
         ry = max((y1 - y0) * 1.6, face_w * 0.13)
-        cy += ry * 0.35   # an opening mouth grows downwards
+        # Centred on the closed mouth: the edit model draws the new mouth in the middle of the mask, so a
+        # mask shifted downwards produced an open mouth that sat visibly lower than the closed one.
+        cy += ry * 0.08
         mask = (((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2 <= 1).astype(np.float32)
         if face is not None:   # never paint outside the face
             grown = Image.fromarray((face > 0.3).astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(5))

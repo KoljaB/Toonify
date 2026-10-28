@@ -26,6 +26,7 @@ const P={angleX:0,angleY:0,angleZ:0,eyeOpenL:1,eyeOpenR:1,eyeX:0,eyeY:0,brow:0,b
 // Toonify: hair amplitudes raised over Anime2.5DRig's defaults (2 / 2 / 2 / 0.4); hair now mostly swings from
 // the head's inertia, with only a light breeze on top.
 const WIND=0.55;
+const JAW=13;   // px (at face scale 1) the chin drops with a fully open mouth
 const RANGES={angleX:[-1,1],angleY:[-1,1],angleZ:[-1,1],eyeOpenL:[0,1],eyeOpenR:[0,1],eyeX:[-1,1],eyeY:[-1,1],body:[-1,1]};
 const FRONTISH={'front hair':1,'side hair':1,'ahoge':1};
 
@@ -128,6 +129,8 @@ function create(gl,rig){
       }
       if(L.fade==='eyeClose'&&EA)y-=vOpen*3;
       if(bn==='eyebrow')y+=(-e.brow*9+(1-vOpen)*3.5)*FS;
+      // jaw drop (from Anime2.5DRig): the face below the mouth moves down with the mouth openness, most at the chin
+      if(bn==='face'&&y>A.mouth.cy)y+=mouthO.x*JAW*FS*smooth((y-A.mouth.cy)/Math.max(1,A.face.y1-A.mouth.cy));
       // --- head transform ---
       let hw=isHead?1:(L.group==='body'?0.16:0);
       if(bn==='neck')hw=0.55*smooth((A.neckBottom-y)/Math.max(1,A.neckBottom-A.neckTop));
