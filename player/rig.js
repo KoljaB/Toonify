@@ -102,7 +102,7 @@ function create(gl,rig){
     const b=L.base,o=L.cur,n=b.length;
     const isHead=L.group==='head';
     const az=e.angleZ*0.07,cz=Math.cos(az),sz=Math.sin(az);
-    const ab=e.body*0.028,cb=Math.cos(ab),sb=Math.sin(ab);
+    const ab=e.body*0.036,cb=Math.cos(ab),sb=Math.sin(ab);   // Toonify: a bit more lean than Anime2.5DRig (0.028)
     const bn=L.bn,eyeSide=L.side,EA=eyeSide==='L'?A.eyeL:(eyeSide==='R'?A.eyeR:null);
     const vOpen=eyeSide==='L'?e.eyeOpenL:e.eyeOpenR;
     const nS=L.strands?L.strands.length:0;
@@ -172,8 +172,12 @@ function create(gl,rig){
     }
   }
   // Idle: glances with eased head follow-through, blinking, breathing (blink/breath from Anime2.5DRig).
-  function animate(nowMs,dt){
+  // Speech energy (0..1, from the audio analyser) drives extra motion while talking: a slow envelope sways the
+  // body, and emphasis (fast minus slow envelope) gives small nods.
+  const talk={fast:{x:0,v:0},slow:{x:0,v:0}};
+  function animate(nowMs,dt,level){
     const t=nowMs/1000,tgt=Object.assign({},P);
+    const tf=damped(talk.fast,level,9,dt),ts=damped(talk.slow,level,1.6,dt),stress=Math.max(0,tf-ts);
     if(nowMs>next.t){   // new glance: mostly small, sometimes back to centre
       next.t=nowMs+2500+Math.random()*4000;
       const home=Math.random()<0.35,r=()=>Math.random()*2-1;
@@ -182,11 +186,12 @@ function create(gl,rig){
     }
     // slow breathing-like drift on top of the held glance
     const ax=look.ax+0.10*Math.sin(t*0.35)+0.04*Math.sin(t*0.83+1.0);
-    const ay=look.ay+0.06*Math.sin(t*0.27+1.7);
+    const ay=look.ay+0.06*Math.sin(t*0.27+1.7)-0.35*stress;
     const az=look.az+0.06*Math.sin(t*0.21+0.5);
     tgt.eyeX=damped(sp.ex,look.ex,14,dt);tgt.eyeY=damped(sp.ey,look.ey,14,dt);
     tgt.angleX=damped(sp.ax,ax,2.6,dt);tgt.angleY=damped(sp.ay,ay,2.4,dt);tgt.angleZ=damped(sp.az,az,2.0,dt);
-    tgt.body=damped(sp.body,0.55*sp.ax.x+0.24*Math.sin(t*0.19+2.1)+0.09*Math.sin(t*0.47+0.4),1.4,dt);   // slow weight shift
+    tgt.body=damped(sp.body,0.6*sp.ax.x+0.38*Math.sin(t*0.19+2.1)+0.14*Math.sin(t*0.47+0.4)   // slow weight shift
+      +0.35*ts*Math.sin(t*1.1+0.3),1.6,dt);                                                     // livelier while talking
     if(blinkT<0&&nowMs>nextBlink){blinkT=0;blinkBounceStarted=false;nextBlink=nowMs+1600+Math.random()*3800;if(Math.random()<0.18)nextBlink=nowMs+280;}
     if(blinkT>=0){blinkT+=dt;
       const d=blinkT,hold=0.34;let v;
@@ -235,7 +240,7 @@ function create(gl,rig){
   let simMs=0;
   return {
     width:W,height:H,
-    frame(dt,mouthState){simMs+=dt*1000;const e=animate(simMs,dt);setMouth(mouthState,dt);render(e);},
+    frame(dt,mouthState,level=0){simMs+=dt*1000;const e=animate(simMs,dt,level);setMouth(mouthState,dt);render(e);},
   };
 }
 root.ToonRig={create};

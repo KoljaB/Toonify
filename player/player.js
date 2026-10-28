@@ -90,7 +90,7 @@ async function main(){
     requestAnimationFrame(tick);
     const dt=Math.max(0,Math.min(0.05,(now-last)/1000));last=now;
     const m=audio.mouth(dt);
-    puppet.frame(dt,m);
+    puppet.frame(dt,m,audio.playing?Math.min(1,audio.level||0):0);
     fpsN++;if(now-fpsT>500){fps=Math.round(fpsN*1000/(now-fpsT));fpsN=0;fpsT=now;}
     status(`${runId} · ${fps} fps · ws ${link} · audio ${audio.running?'on':'locked'} · mouth ${names[m]}`);
   }
