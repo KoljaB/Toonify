@@ -162,3 +162,8 @@ with StreamClient("ws://host:8780/ws/feed") as c:
 - `docs/decisions.md`: why Anime2.5DRig, what was vendored, stripped and added
 - `docs/status.md`: what works, measured numbers, known problems, with samples in `docs/samples/`
 - `docs/licenses.md`: every repo and model with its license (note: Qwen-Image 2.1 is research-only)
+
+## License
+
+Toonify's own code is MIT ([LICENSE](LICENSE)). The models and repositories it uses have their own licenses,
+listed in `docs/licenses.md`; Qwen-Image 2.1 in particular is research / non-commercial only.

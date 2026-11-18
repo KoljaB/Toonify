@@ -7,7 +7,7 @@ a Chromium-based browser on Windows. Sample images are in `docs/samples/`.
 
 | stage | state | evidence |
 |---|---|---|
-| 1 stylize (Qwen-Image 2.1 edit in ComfyUI + BiRefNet cutout) | works | `samples/*_stylized.png`; photo → recognizable anime (glasses, hair, coat kept) |
+| 1 stylize (Qwen-Image 2.1 edit in ComfyUI + BiRefNet cutout) | works | `samples/*_stylized.png`; photo → recognizable anime (glasses, hair, coat kept; the photo-based samples are not published) |
 | upper-body framing of full-body inputs | works | `samples/*_framed.png`; the face is drawn ~2.5× larger |
 | 2 decompose (see-through, unmodified submodule) | works, with repair | 15–18 layers per avatar; see known problems |
 | 3 expressions (masked Qwen inpaint on a face crop) | works | `samples/*_expressions.png`: style-consistent closed eyes / half / open mouth |
