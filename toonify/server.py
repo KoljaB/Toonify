@@ -1,7 +1,8 @@
 """Static player + run files over HTTP, and a WebSocket relay for the audio stream.
 
 /ws/feed  - producers (toonify.stream_client) send the handshake, PCM chunks and `end`.
-/ws/play  - players receive exactly those messages. The last handshake is replayed to late joiners.
+/ws/play  - players receive exactly those messages. The last handshake and the last emotion are replayed to late
+           joiners.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from .config import PLAYER_DIR, RUNS_DIR
 
 def make_app() -> web.Application:
     players: set[web.WebSocketResponse] = set()
-    state = {"handshake": None}
+    state = {"start": None, "emotion": None}
 
     async def broadcast(kind, data):
         for ws in list(players):
@@ -27,8 +28,9 @@ def make_app() -> web.Application:
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(request)
         players.add(ws)
-        if state["handshake"]:
-            await ws.send_str(state["handshake"])
+        for kind in ("start", "emotion"):
+            if state[kind]:
+                await ws.send_str(state[kind])
         try:
             async for _ in ws:   # players only listen
                 pass
@@ -47,8 +49,8 @@ def make_app() -> web.Application:
                     kind = json.loads(msg.data).get("type")
                 except (ValueError, AttributeError):
                     continue
-                if kind == "start":
-                    state["handshake"] = msg.data
+                if kind in state:
+                    state[kind] = msg.data
                 await broadcast("str", msg.data)
         return ws
 

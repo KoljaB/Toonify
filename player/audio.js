@@ -6,6 +6,7 @@
  *   text   {"type":"start","sample_rate":24000,"format":"int16"|"float32","channels":1}
  *   binary raw little-endian PCM, any size (partial samples are carried over)
  *   text   {"type":"end"}   last chunk of an utterance has been sent
+ *   text   {"type":"emotion","name":"sad","intensity":0.8}   passed on to onemotion
  */
 (function(root){
 'use strict';
@@ -30,7 +31,7 @@ class StreamAudio{
     this.ctx=null;this.node=null;this.analyser=null;this.buf=null;this.ready=null;
     this.sampleRate=24000;this.format='int16';this.carry=null;
     this.queued=0;this.underruns=0;this.env=0;this.peak=0;this.state=0;
-    this.onstatus=()=>{};
+    this.onstatus=()=>{};this.onemotion=()=>{};
   }
   // The context runs at the stream's sample rate, so the browser resamples the output once, continuously.
   makeContext(rate){
@@ -68,6 +69,7 @@ class StreamAudio{
           let msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
           if(msg.type==='start')this.start(msg);
           else if(msg.type==='end')this.end();
+          else if(msg.type==='emotion')this.onemotion(msg);
         }else this.chunk(ev.data);
       };
     };

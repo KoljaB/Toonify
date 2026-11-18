@@ -1,7 +1,7 @@
 /*!
  * Toonify — player.js
- * Loads runs/<id>/avatar.psd + the three expression frames + layers.json,
- * rigs them with Anime2.5DRig's rigger and drives mouth states from StreamAudio.
+ * Loads runs/<id>/avatar.psd + the three expression frames + the emotion sets + layers.json,
+ * rigs them with Anime2.5DRig's rigger and drives mouth states and emotions from StreamAudio.
  */
 (function(){
 'use strict';
@@ -40,6 +40,24 @@ async function buildPsdTree(base,info){
   return psd;
 }
 
+// Emotion frames bypass the rigger (it does not know them): one rig part per frame, all placed right above the
+// topmost eye / brow / mouth part, below front hair and accessories. rig.js draws each emotion as one group.
+const EMO_FADE={face:null,eyes_closed:'eyeClose',mouth_half:'mouthHalf',mouth_open:'mouthOpen'};
+async function addEmotionParts(rig,base,info){
+  const parts=[];
+  for(const em of info.emotions||[])for(const f of em.frames){
+    const img=await loadImageData(base+f.file);
+    const [x0,y0]=f.bbox;
+    parts.push({name:'emo_'+em.name+'_'+f.part,source:f.file,x:x0,y:y0,w:img.width,h:img.height,z:0,
+      depth:1.08,group:'head',phys:null,opacity:1,fade:EMO_FADE[f.part],side:null,strands:null,
+      emo:em.name,part:f.part,img:{width:img.width,height:img.height,data:img.data}});
+  }
+  if(!parts.length)return;
+  let at=lastIndex(rig.layers,L=>/^(eyewhite|irides|eyelash|eyebrow|eye_close|mouth_)/.test(L.name));
+  if(at<0)at=lastIndex(rig.layers,L=>L.name==='face');
+  rig.layers.splice(at+1,0,...parts);
+}
+
 function layout(rig){
   // Frame the visible character, not the square see-through canvas.
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
@@ -63,10 +81,16 @@ async function main(){
   const psd=await buildPsdTree(base,info);
   const rig=Rigger.buildRig(psd);
   if(rig.warnings.length)console.info('rig warnings:',rig.warnings);
+  await addEmotionParts(rig,base,info);
   const cv=$('cv');cv.width=rig.canvas.w;cv.height=rig.canvas.h;
   const gl=cv.getContext('webgl',{alpha:true,antialias:true,premultipliedAlpha:true});
   if(!gl){status('WebGL is not available');return;}
-  const puppet=ToonRig.create(gl,rig);
+  const emoOpts={};
+  if(Q.has('emoFade'))emoOpts.fade=parseFloat(Q.get('emoFade'));
+  if(Q.has('emoWait'))emoOpts.maxWait=parseFloat(Q.get('emoWait'));
+  const puppet=ToonRig.create(gl,rig,emoOpts);
+  window.toonEmotion=(name,intensity)=>puppet.setEmotion(name,intensity);   // for testing in the console
+  if(Q.has('emotion'))puppet.setEmotion(Q.get('emotion'));
   layout(rig);
 
   const opts={};
@@ -76,6 +100,7 @@ async function main(){
   const wsUrl=(location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/play';
   let link='connecting';
   audio.onstatus=s=>{link=s;};
+  audio.onemotion=m=>puppet.setEmotion(m.name,m.intensity==null?1:m.intensity);
   audio.connect(wsUrl);
   if(!window.isSecureContext){
     $('unlock').textContent='Audio needs https or localhost (AudioWorklet); open this page via localhost or https';
@@ -92,7 +117,7 @@ async function main(){
     const m=audio.mouth(dt);
     puppet.frame(dt,m,audio.playing?Math.min(1,audio.level||0):0);
     fpsN++;if(now-fpsT>500){fps=Math.round(fpsN*1000/(now-fpsT));fpsN=0;fpsT=now;}
-    status(`${runId} · ${fps} fps · ws ${link} · audio ${audio.running?'on':'locked'} · mouth ${names[m]}`);
+    status(`${runId} · ${fps} fps · ws ${link} · audio ${audio.running?'on':'locked'} · mouth ${names[m]} · ${puppet.emotion}`);
   }
   requestAnimationFrame(tick);
 }

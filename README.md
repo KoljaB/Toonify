@@ -1,13 +1,14 @@
 # Toonify
 
 A photo (or an existing anime picture) of a person goes in. A rigged anime avatar of that person comes out. It
-idles in the browser (blinks, breathes, sways, hair physics) and **lip-syncs live from streamed PCM audio**.
+idles in the browser (blinks, breathes, sways, hair physics), **lip-syncs live from streamed PCM audio** and
+switches between **emotions** (neutral, happy, sad, angry, surprised) on request.
 
 ```
-photo ──► 1 stylize ──► 2 decompose ──► 3 expressions ──► 4 player (browser) ◄── 6 stream_client ◄── TTS
-          Qwen-Image     see-through     Qwen-Image          Anime2.5DRig rig        WebSocket PCM
-          2.1 edit       PSD + layers    masked inpaint      + Web Audio lip-sync
-          (GPU, once)    (GPU, once)     (GPU, once)         (no ML, no GPU compute)
+photo ──► 1 stylize ──► 2 decompose ──► 3 expressions ──► 3b emotions ──► 4 player (browser) ◄── 6 stream_client ◄── TTS
+          Qwen-Image     see-through     Qwen-Image          Qwen-Image       Anime2.5DRig rig        WebSocket PCM
+          2.1 edit       PSD + layers    masked inpaint      masked inpaint   + Web Audio lip-sync    + emotion
+          (GPU, once)    (GPU, once)     (GPU, once)         (GPU, once)      (no ML, no GPU compute)
 ```
 
 Stages read and write `runs/<run id>/` and are cached by input hashes, so you can rerun any stage alone.
@@ -43,13 +44,14 @@ see-through downloads its weights (~10 GB) from Hugging Face on the first run. A
 ## CLI
 
 ```bash
-toonify run photo.jpg --style default        # stages 1–3, prints the player URL and serves it (port 8780)
+toonify run photo.jpg --style default        # stages 1–3b, prints the player URL and serves it (port 8780)
 toonify run anime.png --style faithful       # keep an existing anime drawing's art style
 toonify run photo.jpg --no-serve             # only print the URL (when `toonify serve` already runs)
 
 toonify stylize photo.jpg --style default    # stage 1 -> runs/<id>/stylized.png   (prints the run id)
 toonify decompose <run id> [--vram auto|full|group_offload|nf4|blockswap]
 toonify expressions <run id> [--only eyes_closed mouth_open]
+toonify emotions <run id> [--only happy sad]  # needs the expressions stage; ~4 inpaints per emotion
 toonify serve [--port 8780]                  # player + audio relay
 ```
 
@@ -88,6 +90,12 @@ both never hold VRAM at the same time.
 | `layers.json` | 2/3: canvas, source offset, per layer `name`, `tag`, `bbox`, draw `order`; `expressions` |
 | `expressions/eyes_closed.png`, `mouth_half.png`, `mouth_open.png` | 3: RGBA patches (bbox in `layers.json`) |
 | `expressions/preview_*.png`, `mask_*.png` | 3: full-frame previews and inpainting masks |
+| `emotions/<emotion>_{face,eyes_closed,mouth_half,mouth_open}.png` | 3b: one frame set per emotion; `emotions` in `layers.json` |
+| `emotions/preview_*.png`, `mask_face.png`, `mask_eyes.png` | 3b: full-frame previews and inpainting masks |
+
+**Emotion sets:** the emotion face is inpainted from the neutral face over eyebrows, eyes and mouth. Its closed-eye
+and mouth frames are then inpainted from that emotion face, so the brows and eyes stay the same while the mouth
+moves.
 
 **Decompose repair:** see-through completes hidden parts of each layer, and occasionally such a part ends up drawn
 over a layer it should be behind (a crop top continued over trousers). Parts outside its 23 classes can also be
@@ -98,13 +106,15 @@ layer where the layer below matches the source, and re-adds large missing region
 ## WebSocket protocol
 
 The player connects to `ws://<host>:8780/ws/play`; producers connect to `ws://<host>:8780/ws/feed`. The server
-relays every feed message to all players and replays the last handshake to players that join late.
+relays every feed message to all players and replays the last handshake and the last emotion to players that
+join late.
 
 | message | frame | content |
 |---|---|---|
 | handshake | text | `{"type":"start","sample_rate":24000,"format":"int16","channels":1}` (`format`: `int16` or `float32`, little-endian, mono only) |
 | PCM chunk | binary | raw samples in the handshake format, **any size**; a partial sample at the end is carried over to the next chunk |
 | end | text | `{"type":"end"}`: no more audio for this utterance |
+| emotion | text | `{"type":"emotion","name":"sad","intensity":0.8}`: any time, also mid-utterance. `name`: `neutral`, `happy`, `sad`, `angry`, `surprised` (plus a few aliases such as `joy`, `upset`, `annoyed`, `shocked`). `intensity` (0..1, default 1) scales only posture and motion |
 
 Send a new `start` whenever the sample rate or format changes. Playback runs in an **AudioWorklet**
 (`player/pcm-worklet.js`, modelled on miep's `tts-worklet.js`). The worklet copies samples out of one queue on the
@@ -116,6 +126,13 @@ the recent speech peak and maps it to closed / half / open with hysteresis. The 
 neighbouring mouth frames. The mouth closes when the worklet reports an empty queue, so it also closes after `end`
 once the last sample has played. Thresholds can be overridden in the URL: `gate`, `halfOn`, `halfOff`, `openOn`,
 `openOff`, `attack`, `release`, `peakDecay`, `prebuffer`.
+
+**Emotion changes** wait for a calm moment: up to 250 ms for a closed mouth, and no new blink starts meanwhile.
+Then the new emotion's frame set fades in over 300 ms on top of the old one. Each set has its own closed-eye and
+mouth frames and is drawn as one group (off-screen layer, one opacity), so lip-sync and blinking keep running
+during the fade and parts of a set never show through each other. Head pitch and tilt, body sway, idle speed, speech
+nods and blink rate follow the emotion. Runs without emotion frames only get the posture change. URL overrides:
+`emoFade`, `emoWait` (seconds), `emotion` (start emotion); `toonEmotion('happy')` switches from the browser console.
 
 **Secure context required:** browsers only provide AudioWorklet over HTTPS or on `localhost`. Either open the
 player through an SSH tunnel (`ssh -N -L 8780:127.0.0.1:8780 user@gpu-host`, then `http://localhost:8780/?run=…`)
@@ -131,10 +148,11 @@ with StreamClient("ws://host:8780/ws/feed") as c:
     for chunk in chunks:           # bytes or numpy arrays
         c.send(chunk)
     c.end()
+    c.emotion("happy")             # any time; crossfades the face
 ```
 
 - WAV files take the same path: `python -m toonify.stream_client speech.wav --url ws://host:8780/ws/feed`
-  (paced at real time; `--burst` sends everything at once).
+  (paced at real time; `--burst` sends everything at once). `--emotion sad` (with or without a WAV) sets the emotion.
 - RealtimeTTS: `python examples/realtimetts_stream.py --url ws://host:8780/ws/feed --tts-url http://<qwen tts server>:18085 "Hello!"`.
   This uses `QwenServerEngine` (RealtimeTTS ≥ 0.9.0rc4) with local playback muted and `on_audio_chunk=client.send`.
   `--engine kokoro` runs locally instead.

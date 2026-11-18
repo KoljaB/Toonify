@@ -11,6 +11,7 @@ a Chromium-based browser on Windows. Sample images are in `docs/samples/`.
 | upper-body framing of full-body inputs | works | `samples/*_framed.png`; the face is drawn ~2.5× larger |
 | 2 decompose (see-through, unmodified submodule) | works, with repair | 15–18 layers per avatar; see known problems |
 | 3 expressions (masked Qwen inpaint on a face crop) | works | `samples/*_expressions.png`: style-consistent closed eyes / half / open mouth |
+| 3b emotions (frame set per emotion, chained inpaints) | works | happy, sad, angry and surprised frame sets generated for the female sample (`runs/input_anime_female-faithful-17ac0f11/emotions/`, not committed); player crossfade, gate and lip-sync per set first tested with tinted stand-in frames |
 | 4 player (Anime2.5DRig rig, WebGL1) | works | 238–240 fps measured (display-capped) on the test PC |
 | 5 live lip-sync (WebSocket PCM → Web Audio → RMS states) | works | see measurements below |
 | 6 stream client + RealtimeTTS example | works | Qwen TTS server → `on_audio_chunk` → player |

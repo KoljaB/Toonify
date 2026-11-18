@@ -4,7 +4,8 @@
  * and breathing below are taken from Anime2.5DRig's app.js (MIT, see
  * vendor/LICENSE-Anime2.5DRig) with the editor, OBS, camera, microphone and
  * export code stripped. Toonify change: three discrete mouth states
- * (closed / half / open) driven from outside instead of a continuous mouth slider.
+ * (closed / half / open) driven from outside instead of a continuous mouth slider, and emotion frame
+ * sets that are crossfaded as whole groups, together with a matching posture.
  */
 (function(root){
 'use strict';
@@ -29,15 +30,31 @@ const WIND=0.55;
 const JAW=13;   // px (at face scale 1) the chin drops with a fully open mouth
 const RANGES={angleX:[-1,1],angleY:[-1,1],angleZ:[-1,1],eyeOpenL:[0,1],eyeOpenR:[0,1],eyeX:[-1,1],eyeY:[-1,1],body:[-1,1]};
 const FRONTISH={'front hair':1,'side hair':1,'ahoge':1};
+// Posture and motion per emotion (scaled by the message's intensity): head pitch / tilt offsets, and multipliers
+// for body sway, idle motion speed, speech nods and the gap between blinks.
+const EMOTIONS={
+  neutral:{},
+  happy:{pitch:0.08,tilt:0.08,sway:1.3,speed:1.15,nod:1.3,blink:1},
+  sad:{pitch:-0.30,tilt:-0.06,sway:0.55,speed:0.7,nod:0.6,blink:1.3},
+  angry:{pitch:-0.14,tilt:0,sway:0.8,speed:1.2,nod:1.5,blink:1.4},
+  surprised:{pitch:0.15,tilt:0.04,sway:0.9,speed:1.1,nod:1,blink:2.0},
+};
+const ALIASES={joy:'happy',joyful:'happy',glad:'happy',cheerful:'happy',excited:'happy',amused:'happy',
+  unhappy:'sad',sorrow:'sad',sorrowful:'sad',upset:'sad',disappointed:'sad',mad:'angry',annoyed:'angry',
+  furious:'angry',irritated:'angry',shocked:'surprised',astonished:'surprised',amazed:'surprised',
+  calm:'neutral',none:'neutral',default:'neutral'};
+const EMO_DEFAULTS={fade:0.3,maxWait:0.25};   // s crossfade; s an emotion change waits for a closed mouth at most
 
-function create(gl,rig){
+function create(gl,rig,opts={}){
+  const EO=Object.assign({},EMO_DEFAULTS,opts);
   const renderer=root.RigRenderer.create(gl);
   const W=rig.canvas.w,H=rig.canvas.h,A=rig.anchors;
   const FS=A.faceScale,NP=A.neckPivot,BP=A.bodyPivot,FC={x:A.face.cx,y:A.face.cy};
   const fh=A.face.y1-A.face.y0;
   const CHEST={cx:NP.cx,cy:A.neckBottom+fh*0.60,rx:Math.max(1,(A.face.x1-A.face.x0)*0.60),ry:Math.max(1,fh*0.45)};
   const bounce={x:0,v:0,dy:0};
-  const layers=[];
+  const layers=[],sets={};
+  let emoAt=-1;   // draw position of the emotion groups (all emotion layers sit together above the face parts)
   for(const Lr of rig.layers){
     const L=Object.assign({},Lr);delete L.img;
     const cell=(L.phys?30:42)*Math.max(0.6,W/768);
@@ -69,6 +86,7 @@ function create(gl,rig){
       L.lenK=L.phys==='sway'?1:clamp((lens[lens.length>>1]/faceH-0.45)/0.9,0.08,1);
     }
     renderer.upload(L,{positions:L.cur,uvs:uv,indices:idx,image:new ImageData(Lr.img.data,Lr.img.width,Lr.img.height)});
+    if(L.emo){(sets[L.emo]||(sets[L.emo]=[])).push(L);if(emoAt<0)emoAt=layers.length;}
     layers.push(L);
   }
   console.info('hair motion scale:',layers.filter(L=>L.lenK!=null).map(L=>L.name+'='+L.lenK.toFixed(2)).join(', '));
@@ -130,7 +148,7 @@ function create(gl,rig){
       if(L.fade==='eyeClose'&&EA)y-=vOpen*3;
       if(bn==='eyebrow')y+=(-e.brow*9+(1-vOpen)*3.5)*FS;
       // jaw drop (from Anime2.5DRig): the face below the mouth moves down with the mouth openness, most at the chin
-      if(bn==='face'&&y>A.mouth.cy)y+=mouthO.x*JAW*FS*smooth((y-A.mouth.cy)/Math.max(1,A.face.y1-A.mouth.cy));
+      if((bn==='face'||L.part==='face')&&y>A.mouth.cy)y+=mouthO.x*JAW*FS*smooth((y-A.mouth.cy)/Math.max(1,A.face.y1-A.mouth.cy));
       // --- head transform ---
       let hw=isHead?1:(L.group==='body'?0.16:0);
       if(bn==='neck')hw=0.55*smooth((A.neckBottom-y)/Math.max(1,A.neckBottom-A.neckTop));
@@ -178,9 +196,54 @@ function create(gl,rig){
   // Speech energy (0..1, from the audio analyser) drives extra motion while talking: a slow envelope sways the
   // body, and emphasis (fast minus slow envelope) gives small nods.
   const talk={fast:{x:0,v:0},slow:{x:0,v:0}};
+  // Emotions. The face frames are a stack of groups ({name, a}), drawn bottom to top over the neutral face. A new
+  // emotion is pushed on top with a = 0 and fades in; once it covers everything, the groups below are dropped.
+  // Going to neutral (or to an emotion without frames) fades all groups out. Each group has its own closed-eye
+  // and mouth frames, so blinking and lip-sync go on during a crossfade. A change waits up to maxWait for a
+  // closed mouth, because two closed faces blend more cleanly than two different open mouths.
+  const emo={stack:[],pending:null,wait:0,current:'neutral',intensity:1};
+  const posture={pitch:mk(),tilt:mk(),sway:mk(),speed:mk(),nod:mk(),blink:mk()};
+  for(const k of ['sway','speed','nod','blink'])posture[k].x=1;
+  let idleT=0;
+  function resolveEmotion(name){
+    let n=String(name||'').trim().toLowerCase();
+    n=ALIASES[n]||n;
+    if(!EMOTIONS[n]&&!sets[n]){console.warn('toonify: unknown emotion',name);return null;}
+    return n;
+  }
+  function setEmotion(name,intensity=1){
+    const n=resolveEmotion(name);
+    if(!n)return;
+    emo.pending={name:n,intensity:clamp(+intensity||0,0,1)};emo.wait=0;
+  }
+  function updateEmotion(dt){
+    if(emo.pending){
+      emo.wait+=dt;
+      if((mouthO.x<0.08&&blinkT<0)||emo.wait>=EO.maxWait){
+        const {name,intensity}=emo.pending;emo.pending=null;
+        emo.current=name;emo.intensity=intensity;
+        const top=emo.stack[emo.stack.length-1];
+        if(sets[name]&&!(top&&top.name===name))emo.stack.push({name,a:0});
+      }
+    }
+    const step=dt/Math.max(0.01,EO.fade),top=emo.stack[emo.stack.length-1];
+    if(top&&top.name===emo.current){
+      top.a=Math.min(1,top.a+step);
+      if(top.a>=1)emo.stack=[top];
+    }else{
+      for(const g of emo.stack)g.a-=step;
+      emo.stack=emo.stack.filter(g=>g.a>0);
+    }
+    const P0=EMOTIONS[emo.current]||{},i=emo.intensity;
+    const off=k=>(P0[k]||0)*i,mul=k=>1+((P0[k]==null?1:P0[k])-1)*i;
+    damped(posture.pitch,off('pitch'),3,dt);damped(posture.tilt,off('tilt'),3,dt);
+    for(const k of ['sway','speed','nod','blink'])damped(posture[k],mul(k),3,dt);
+  }
   function animate(nowMs,dt,level){
-    const t=nowMs/1000,tgt=Object.assign({},P);
-    const tf=damped(talk.fast,level,9,dt),ts=damped(talk.slow,level,1.6,dt),stress=Math.max(0,tf-ts);
+    const tgt=Object.assign({},P);
+    idleT+=dt*Math.max(0.2,posture.speed.x);
+    const t=idleT;
+    const tf=damped(talk.fast,level,9,dt),ts=damped(talk.slow,level,1.6,dt),stress=Math.max(0,tf-ts)*posture.nod.x;
     if(nowMs>next.t){   // new glance: mostly small, sometimes back to centre
       next.t=nowMs+2500+Math.random()*4000;
       const home=Math.random()<0.35,r=()=>Math.random()*2-1;
@@ -189,13 +252,18 @@ function create(gl,rig){
     }
     // slow breathing-like drift on top of the held glance
     const ax=look.ax+0.10*Math.sin(t*0.35)+0.04*Math.sin(t*0.83+1.0);
-    const ay=look.ay+0.06*Math.sin(t*0.27+1.7)-0.35*stress;
-    const az=look.az+0.06*Math.sin(t*0.21+0.5);
+    const ay=look.ay+0.06*Math.sin(t*0.27+1.7)-0.35*stress+posture.pitch.x;
+    const az=look.az+0.06*Math.sin(t*0.21+0.5)+posture.tilt.x;
     tgt.eyeX=damped(sp.ex,look.ex,14,dt);tgt.eyeY=damped(sp.ey,look.ey,14,dt);
     tgt.angleX=damped(sp.ax,ax,2.6,dt);tgt.angleY=damped(sp.ay,ay,2.4,dt);tgt.angleZ=damped(sp.az,az,2.0,dt);
-    tgt.body=damped(sp.body,0.6*sp.ax.x+0.38*Math.sin(t*0.19+2.1)+0.14*Math.sin(t*0.47+0.4)   // slow weight shift
-      +0.35*ts*Math.sin(t*1.1+0.3),1.6,dt);                                                     // livelier while talking
-    if(blinkT<0&&nowMs>nextBlink){blinkT=0;blinkBounceStarted=false;nextBlink=nowMs+1600+Math.random()*3800;if(Math.random()<0.18)nextBlink=nowMs+280;}
+    const sw=posture.sway.x;
+    tgt.body=damped(sp.body,0.6*sp.ax.x+sw*(0.38*Math.sin(t*0.19+2.1)+0.14*Math.sin(t*0.47+0.4)   // slow weight shift
+      +0.35*ts*Math.sin(t*1.1+0.3)),1.6,dt);                                                     // livelier while talking
+    // No new blink while an emotion change waits for a calm moment.
+    if(blinkT<0&&nowMs>nextBlink&&!emo.pending){
+      blinkT=0;blinkBounceStarted=false;nextBlink=nowMs+(1600+Math.random()*3800)*posture.blink.x;
+      if(Math.random()<0.18)nextBlink=nowMs+280;
+    }
     if(blinkT>=0){blinkT+=dt;
       const d=blinkT,hold=0.34;let v;
       if(d<0.08)v=1-d/0.08;else if(d<0.08+hold)v=0;else if(d<0.24+hold){
@@ -230,7 +298,20 @@ function create(gl,rig){
   }
   function render(e){
     const items=[],masks=[];
-    for(const L of layers){
+    for(let i=0;i<layers.length;i++){
+      const L=layers[i];
+      if(i===emoAt){
+        for(const g of emo.stack){
+          const group=[];
+          for(const S of sets[g.name]){
+            const alpha=fadeAlpha(S,e);
+            if(alpha<0.004)continue;
+            deform(S,e);renderer.positions(S,S.cur);group.push({L:S,alpha});
+          }
+          items.push({group,alpha:smooth(g.a)});
+        }
+      }
+      if(L.emo)continue;
       const isMask=L.bn==='eyewhite'&&!!L.side;
       const alpha=fadeAlpha(L,e)*(L.opacity==null?1:L.opacity);
       if(alpha<0.004&&!isMask)continue;
@@ -243,7 +324,12 @@ function create(gl,rig){
   let simMs=0;
   return {
     width:W,height:H,
-    frame(dt,mouthState,level=0){simMs+=dt*1000;const e=animate(simMs,dt,level);setMouth(mouthState,dt);render(e);},
+    emotions:Object.keys(sets),
+    setEmotion,
+    get emotion(){return emo.pending?emo.pending.name+'…':emo.current;},
+    frame(dt,mouthState,level=0){
+      simMs+=dt*1000;updateEmotion(dt);const e=animate(simMs,dt,level);setMouth(mouthState,dt);render(e);
+    },
   };
 }
 root.ToonRig={create};

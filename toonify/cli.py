@@ -40,7 +40,7 @@ def main(argv=None):
             sp.add_argument("--style", default="default")
         sp.add_argument("--force", action="store_true", help="ignore the stage cache")
 
-    sp = sub.add_parser("run", help="stylize + decompose + expressions, then serve the player")
+    sp = sub.add_parser("run", help="stylize + decompose + expressions + emotions, then serve the player")
     common(sp)
     sp.add_argument("--backend", default="comfy-qwen", choices=["comfy-qwen", "api"])
     sp.add_argument("--vram", default="auto", choices=["auto", "full", "group_offload", "nf4", "blockswap"])
@@ -62,6 +62,11 @@ def main(argv=None):
     sp.add_argument("--only", nargs="*", help="regenerate only these frames")
     sp.add_argument("--force", action="store_true")
 
+    sp = sub.add_parser("emotions", help="stage 4: one frame set per emotion (happy, sad, angry, surprised)")
+    sp.add_argument("run")
+    sp.add_argument("--only", nargs="*", help="regenerate only these emotions")
+    sp.add_argument("--force", action="store_true")
+
     sp = sub.add_parser("serve", help="serve the player and the audio WebSocket relay")
     sp.add_argument("--port", type=int, default=8780)
     sp.add_argument("--host", default="0.0.0.0")
@@ -76,7 +81,7 @@ def main(argv=None):
         return
 
     from .comfy import ComfyClient
-    from .stages import decompose, expressions, stylize
+    from .stages import decompose, emotions, expressions, stylize
 
     if args.cmd == "stylize":
         run = _run_for(args)
@@ -86,12 +91,15 @@ def main(argv=None):
         decompose.run(_run_for(args), args.vram, args.force, before_gpu=ComfyClient().free)
     elif args.cmd == "expressions":
         expressions.run(_run_for(args), args.force, only=args.only)
+    elif args.cmd == "emotions":
+        emotions.run(_run_for(args), args.force, only=args.only)
     elif args.cmd == "run":
         run = _run_for(args)
         client = ComfyClient()
         stylize.run(run, Path(args.photo), args.style, args.backend, force=args.force, client=client)
         decompose.run(run, args.vram, args.force, before_gpu=client.free)
         expressions.run(run, args.force, client=client)
+        emotions.run(run, args.force, client=client)
         client.free()
         client.stop()
         url = player_url(run, args.port)

@@ -5,6 +5,7 @@
         c.start(sample_rate=24000, fmt="int16")
         c.send(chunk_bytes)      # any size, any number of times
         c.end()
+        c.emotion("happy")       # crossfade the face to another emotion set (any time, also mid-utterance)
 
 WAV files go through exactly the same path:  python -m toonify.stream_client speech.wav --url ws://host:8780/ws/feed
 """
@@ -59,6 +60,11 @@ class StreamClient:
     def end(self) -> None:
         self._ws().send(json.dumps({"type": "end"}))
 
+    def emotion(self, name: str, intensity: float = 1.0) -> None:
+        """Switch the face to an emotion ("neutral", "happy", "sad", "angry", "surprised"). `intensity` (0..1)
+        scales the posture and motion that go with it; the face frames always show at full strength."""
+        self._ws().send(json.dumps({"type": "emotion", "name": name, "intensity": float(intensity)}))
+
     def close(self) -> None:
         if self.ws is not None:
             self._cm.__exit__(None, None, None)
@@ -106,13 +112,21 @@ def stream_wav(path: str, url: str, chunk_ms: float = 40, realtime: bool = True)
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Stream a WAV file to the Toonify player")
-    p.add_argument("wav")
+    p = argparse.ArgumentParser(description="Stream a WAV file to the Toonify player, or set its emotion")
+    p.add_argument("wav", nargs="?")
+    p.add_argument("--emotion", help="send this emotion first (neutral, happy, sad, angry, surprised)")
+    p.add_argument("--intensity", type=float, default=1.0)
     p.add_argument("--url", default="ws://127.0.0.1:8780/ws/feed")
     p.add_argument("--chunk-ms", type=float, default=40)
     p.add_argument("--burst", action="store_true", help="send everything at once instead of real-time pacing")
     a = p.parse_args(argv)
-    stream_wav(a.wav, a.url, a.chunk_ms, realtime=not a.burst)
+    if not a.wav and not a.emotion:
+        p.error("give a WAV file and/or --emotion")
+    if a.emotion:
+        with StreamClient(a.url) as c:
+            c.emotion(a.emotion, a.intensity)
+    if a.wav:
+        stream_wav(a.wav, a.url, a.chunk_ms, realtime=not a.burst)
 
 
 if __name__ == "__main__":

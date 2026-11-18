@@ -6,7 +6,9 @@
  * painting order or the eye-white opacity.
  * MIT License
  *
- * Vendored unchanged into Toonify from https://github.com/852wa/Anime2.5DRig (v2.0.0).
+ * Vendored into Toonify from https://github.com/852wa/Anime2.5DRig (v2.0.0).
+ * Toonify change: items can be groups ({group:[items], alpha}) that are drawn into an off-screen
+ * layer and composited with one opacity, so overlapping parts of a group do not show through each other.
  */
 (function(root){
 'use strict';
@@ -22,6 +24,7 @@ const FS='#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprec
 
 function createRenderer(gl){
   let prog=null,loc=null,maskTex=null,maskFbo=null,maskW=0,maskH=0;
+  let grpTex=null,grpFbo=null,grpW=0,grpH=0,quad=null;
   function shader(type,src){
     const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
     if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){const msg=gl.getShaderInfoLog(s);gl.deleteShader(s);throw new Error(msg);}
@@ -40,7 +43,7 @@ function createRenderer(gl){
     gl.uniform1i(loc.uTex,0);gl.uniform1i(loc.uMask,1);
     gl.enable(gl.BLEND);gl.blendFunc(gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
-    maskTex=null;maskFbo=null;maskW=maskH=0;
+    maskTex=null;maskFbo=null;maskW=maskH=0;grpTex=null;grpFbo=null;grpW=grpH=0;quad=null;
   }
   function texture(image){
     const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
@@ -62,6 +65,28 @@ function createRenderer(gl){
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);
     if(!ok)throw new Error('瞳のマスク用メモリを確保できません。PSDを縮小してください');
     maskW=w;maskH=h;
+  }
+  // Off-screen layer for groups, plus a canvas-sized quad that draws it back (texture rows are bottom-up).
+  function ensureGroup(w,h){
+    if(grpTex&&grpW===w&&grpH===h)return;
+    if(grpTex)gl.deleteTexture(grpTex);if(grpFbo)gl.deleteFramebuffer(grpFbo);
+    grpTex=texture(null);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    grpFbo=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,grpFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,grpTex,0);
+    const ok=gl.checkFramebufferStatus(gl.FRAMEBUFFER)===gl.FRAMEBUFFER_COMPLETE;
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    if(!ok)throw new Error('group layer: framebuffer incomplete');
+    if(quad){gl.deleteBuffer(quad.vboPos);gl.deleteBuffer(quad.vboUV);gl.deleteBuffer(quad.ibo);}
+    quad={};
+    quad.vboPos=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad.vboPos);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0,w,0,0,h,w,h]),gl.STATIC_DRAW);
+    quad.vboUV=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad.vboUV);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,1,1,1,0,0,1,0]),gl.STATIC_DRAW);
+    quad.ibo=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,quad.ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array([0,1,2,1,3,2]),gl.STATIC_DRAW);
+    quad.nIdx=6;
+    grpW=w;grpH=h;
   }
   // Upload one mesh + texture. `mesh` = {positions, uvs, indices, image}.
   function upload(L,mesh){
@@ -113,6 +138,17 @@ function createRenderer(gl){
     gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,maskTex);gl.activeTexture(gl.TEXTURE0);
     let masked=false;
     for(const it of frame.items){
+      if(it.group){
+        if(!it.group.length||it.alpha<0.004)continue;
+        ensureGroup(W,H);
+        gl.uniform1f(loc.uUseMask,0);masked=false;
+        gl.bindFramebuffer(gl.FRAMEBUFFER,grpFbo);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+        for(const g of it.group){bind(g.L);gl.uniform1f(loc.uAlpha,g.alpha);gl.drawElements(gl.TRIANGLES,g.L.nIdx,gl.UNSIGNED_SHORT,0);}
+        gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+        bind(Object.assign({tex:grpTex},quad));gl.uniform1f(loc.uAlpha,it.alpha);
+        gl.drawElements(gl.TRIANGLES,quad.nIdx,gl.UNSIGNED_SHORT,0);
+        continue;
+      }
       bind(it.L);gl.uniform1f(loc.uAlpha,it.alpha);
       const clip=it.clip&&hasMask[it.clip];
       if(clip){gl.uniform1f(loc.uUseMask,1);gl.uniform2f(loc.uMaskCh,it.clip==='L'?1:0,it.clip==='R'?1:0);masked=true;}
